@@ -1,23 +1,42 @@
 #lang s-exp "kleecket.rkt"
 
-;; We perform symbolic execution using BFS strategy
-;; For example, state 3 should be outputted before state 1 and 2
+(#:comment
+ "We perform symbolic execution using BFS strategy"
+ "For example, state 3 should be outputted before state 1 and 2")
 
-(if (symbolic b1)
-    (if (symbolic b2)
-        1
-        2)
+(if (= 99 (symbolic b1 int))
+    (if (symbolic b2 bool) 1 2)
     3)
 
-;; We check for division by 0
+(#:comment "We check for division by 0")
 
-(/ 7 (symbolic x))
+(/ 7 (+ 1 (symbolic x int)))
 
-;; We can guard division by 0
+(#:comment "We can guard division by 0")
 
-(let ([x (symbolic x)])
-  (if (= x 0)
+(let ([x (symbolic x int)])
+  (if (= x -1)
       (displayln "x is 0")
-      (/ 7 x)))
+      (/ 7 (+ 1 x))))
+
+(#:comment "If true branch")
+
+(if #t 42 99)
+
+(#:comment "Yet another if true branch")
+
+(if 123 42 99)
+
+(#:comment "If false branch")
+
+(if #f 42 99)
+
+(#:comment "Loop")
+
+(let ([x 0])
+  (while (< x 10)
+    (begin
+      (displayln x)
+      (set! x (+ x 1)))))
 
 ;; Please add more!

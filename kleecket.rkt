@@ -1,133 +1,167 @@
-#lang racket
+#lang racket/base
 
 (require racket/control
+         racket/function
+         racket/match
+         racket/string
+         racket/format
+         racket/list
+         racket/stxparam
          data/queue
-         (prefix-in rosette: rosette))
+         (prefix-in rosette: rosette)
+         (for-syntax syntax/parse
+                     racket/function
+                     racket/syntax
+                     racket/base))
 
 (provide (rename-out [module-begin #%module-begin]))
 
 (define queue (make-queue))
-
 (define symbol-store (make-hash))
 (define location 0)
+(define sep (make-string 72 #\#))
 
 (struct state (val st pc) #:transparent)
 (struct closure (x body env))
 
-(define (lift/int x) (rosette:if x 1 0))
+(define error raise-user-error)
+(define (assert x #:msg [msg #f] . xs)
+  (when (not x) (apply error (or msg "Assertion error") x xs)))
+(define (solve pc)
+  (assert (empty? (rosette:asserts))
+          #:msg "Rosette assertion store is not empty (pc attached)"
+          (rosette:asserts) pc)
+  (rosette:solve (rosette:assert (apply rosette:&& pc))))
 
-(define Z `(lambda (f)
-             (app
-              (lambda (x) (app f (lambda (v) (app (app x x) v))))
-              (lambda (x) (app f (lambda (v) (app (app x x) v)))))))
+(define-syntax-parameter threading
+  (curry raise-syntax-error #f "wrong use outside of match+lift-rosette"))
+
+(define-syntax threading*
+  (syntax-parser
+    #:datum-literals (<-)
+    [(_ env:id st:id pc:id (_ (~seq id:id <- e:expr) ... #:explicit ret:expr))
+     #'(let ([st st] [pc pc])
+         (match-let* ([(state id st pc) (interp e env st pc)] ...)
+           ret))]
+    [(_ env:id st:id pc:id (whatever ... ret:expr))
+     #'(threading* env st pc (whatever ... #:explicit (state ret st pc)))]))
+
+(define-syntax (match+lift-rosette expr)
+  (syntax-parse expr
+    [(_ stx:id env:id st:id pc:id (sym:id ...) clauses ...)
+     (with-syntax ([(rosette-sym ...) (map (curry format-id expr "rosette:~a")
+                                           (syntax->list #'(sym ...)))])
+       #`(syntax-parameterize ([threading (λ (stx*) #`(threading* env st pc #,stx*))])
+           (match stx
+             [`(sym ,e-left ,e-right)
+              (threading val-left <- e-left
+                         val-right <- e-right
+                         (rosette-sym val-left val-right))] ...
+             clauses ...)))]))
+
+(define (clear-assert! v)
+  (rosette:clear-asserts!)
+  v)
 
 (define (interp stx env st pc)
-  (match stx
-    [(? number?) (state stx st pc)]
-    [(? symbol?)
-     (state (hash-ref st (hash-ref env stx
-                                   (thunk (error "unbound identifier" stx)))) st pc)]
-    [(? string?) (state stx st pc)]
-    
-    [`(not ,e) (interp `(if ,e 0 1) env st pc)]
-    [`(and ,e-left ,e-right) (interp `(if ,e-left ,e-right 0) env st pc)]
-    [`(or ,e-left ,e-right) (interp `(if ,e-left 1 ,e-right) env st pc)]
-    
-    [`(= ,e-left ,e-right)
-     (match-define (state val-left st-left pc-left) (interp e-left env st pc))
-     (match-define (state val-right st-right pc-right) (interp e-right env st-left pc-left))
-     (state (lift/int (rosette:= val-left val-right)) st-right pc-right)]
-    [`(+ ,e-left ,e-right)
-     (match-define (state val-left st-left pc-left) (interp e-left env st pc))
-     (match-define (state val-right st-right pc-right) (interp e-right env st-left pc-left))
-     (state (rosette:+ val-left val-right) st-right pc-right)]
-    [`(- ,e-left ,e-right)
-     (match-define (state val-left st-left pc-left) (interp e-left env st pc))
-     (match-define (state val-right st-right pc-right) (interp e-right env st-left pc-left))
-     (state (rosette:- val-left val-right) st-right pc-right)]    
-    [`(* ,e-left ,e-right)
-     (match-define (state val-left st-left pc-left) (interp e-left env st pc))
-     (match-define (state val-right st-right pc-right) (interp e-right env st-left pc-left))
-     (state (lift/int (rosette:* val-left val-right)) st-right pc-right)]
-    [`(/safe ,e-left ,e-right)
-     (match-define (state val-left st-left pc-left) (interp e-left env st pc))
-     (match-define (state val-right st-right pc-right) (interp e-right env st-left pc-left))
-     (state (rosette:quotient val-left val-right) st-right pc-right)]
-    [`(/ ,e-left ,e-right)
-     (interp `(let ([$x ,e-left])
-                (let ([$y ,e-right])
-                  (begin
-                    (assert (not (= $y 0)))
-                    (/safe $x $y)))) env st pc)]
-    
-    [`(lambda (,x) ,e) (state (closure x e env) st pc)]
-    [`(begin) (state (void) st pc)]
-    [`(let ([,x ,v]) ,e) (interp `(app (lambda (,x) ,e) ,v) env st pc)]
-    [`(letrec ([,x ,e]) ,body) (interp `(let ([,x (app ,Z ,e)]) ,body) env st pc)]
-    [`(while ,c ,body)
-     (interp `(letrec ([loop (lambda (loop)
-                               (lambda (_)
-                                 (if ,c
-                                   (begin
-                                     ,body
-                                     (app loop 0))
-                                   (begin))))])
-                (app loop 0)) env st pc)]
-    [`(displayln ,e)
-     (match-define (state val-e st-e pc-e) (interp e env st pc))
-     (displayln val-e)
-     (state val-e st-e pc-e)]
-    [`(assert 0) (error "assertion fails with path condition" pc)]
-    [`(assert ,e) (interp `(if ,e (begin) (assert 0)) env st pc)]
-    [`(app ,f ,a)
-     (match-define (state val-f st-f pc-f) (interp f env st pc))
-     (match-define (state val-a st-a pc-a) (interp a env st-f pc-f))
-     (match val-f
-       [(closure x body env)
-        (set! location (add1 location))
-        (interp body (hash-set env x location) (hash-set st-a location val-a) pc-a)]
-       [_ (error "not a function" val-f)])]
-    [`(set! ,x ,e)
-     (match-define (state val-e st-e pc-e) (interp e env st pc))
-     (state val-e (hash-set st (hash-ref env x) val-e) pc-e)]
-    [`(begin ,e) (interp e env st pc)]
-    [`(begin ,e ,xs ...)
-     (match-define (state _ st-e pc-e)(interp e env st pc))
-     (interp `(begin ,@xs) env st-e pc-e)]
-    [`(symbolic ,e)
-     (state (hash-ref! symbol-store e
-                       (thunk (rosette:constant (datum->syntax #f e)
-                                                rosette:integer?)))
-            st
-            pc)]
-    [`(if ,c ,t ,e)
-     (match-define (state val-c st-c pc-c) (interp c env st pc))
-     (match val-c
-       [0 (interp e env st-c pc-c)]
-       [(? integer?) (interp t env st-c pc-c)]
-       [condition (shift
-                   k
-                   (let ([new-pc (cons (rosette:not (rosette:= 0 condition))
-                                       pc-c)])
-                     (when (rosette:sat?
-                            (rosette:solve (rosette:assert
-                                            (apply rosette:&& new-pc))))
-                       (enqueue! queue (thunk (k (interp t env st-c new-pc))))))
-                   (let ([new-pc (cons (rosette:= 0 condition)
-                                       pc-c)])
-                     (when (rosette:sat?
-                            (rosette:solve (rosette:assert
-                                            (apply rosette:&& new-pc))))
-                       (enqueue! queue (thunk (k (interp e env st-c new-pc)))))))])]))
+  (match+lift-rosette
+   stx env st pc
+   (= > < <= >= + - *)
+   [(? number?) (state stx st pc)]
+   [(? boolean?) (state stx st pc)]
+   [(? string?) (state stx st pc)]
 
-(define-syntax-rule (module-begin stx ...)
-  (#%module-begin (begin
-                    (enqueue! queue (thunk
-                                     (interp (transform 'stx) (hash) (hash) '())))
-                    (main)
-                    (displayln "\n-----------------------------\n"))
-                  ...))
+   [(? symbol?)
+    (state (hash-ref st (hash-ref env stx
+                                  (thunk (error "unbound identifier" stx)))) st pc)]
 
+   [`(not ,e) (interp `(if ,e #f #t) env st pc)]
+   [`(and ,e-left ,e-right) (interp `(if ,e-left ,e-right #f) env st pc)]
+   [`(or ,e-left ,e-right) (interp `(if ,e-left #t ,e-right) env st pc)]
+
+   [`(/safe ,e-left ,e-right)
+    (threading val-left <- e-left
+               val-right <- e-right
+               (clear-assert! (rosette:quotient val-left val-right)))]
+   [`(/ ,e-left ,e-right)
+    (interp `(let ([$x ,e-left])
+               (let ([$y ,e-right])
+                 (begin
+                   (assert (not (= $y 0)))
+                   (/safe $x $y)))) env st pc)]
+
+   [`(lambda (,x) ,e) (state (closure x e env) st pc)]
+   [`(let ([,x ,v]) ,e) (interp `(app (lambda (,x) ,e) ,v) env st pc)]
+   [`(letrec ([,x ,e]) ,body) (interp `(let ([,x 0])
+                                         (begin
+                                           (set! ,x ,e)
+                                           ,body)) env st pc)]
+   [`(while ,c ,body)
+    (interp `(letrec ([$loop (lambda (_) (if ,c (begin ,body (app $loop 0)) (begin)))])
+               (app $loop 0)) env st pc)]
+   [`(displayln ,e)
+    (threading val <- e
+               (begin (printf "STDOUT: ~a\n\n" val) val))]
+   [`(assert #f) (error 'ERROR
+                        (~a "assertion fails with path condition ~s "
+                            "with example model ~s\n")
+                        pc (solve pc))]
+   [`(assert ,e) (interp `(if ,e (begin) (assert #f)) env st pc)]
+   [`(app ,f ,a)
+    (threading val-f <- f
+               val-a <- a
+               #:explicit
+               (match val-f
+                 [(closure x body env)
+                  (set! location (add1 location))
+                  (interp body
+                          (hash-set env x location)
+                          (hash-set st location val-a) pc)]
+                 [_ (error "not a function" val-f)]))]
+   [`(set! ,x ,e)
+    (match-define (state val-e st-e pc-e) (interp e env st pc))
+    (state val-e (hash-set st (hash-ref env x) val-e) pc-e)]
+   [`(begin) (state (void) st pc)]
+   [`(begin ,e) (interp e env st pc)]
+   [`(begin ,e ,xs ...)
+    (threading _ <- e
+               v <- `(begin ,@xs)
+               v)]
+   [`(symbolic ,e ,type)
+    (state (hash-ref! symbol-store (cons e type)
+                      (thunk (rosette:constant (datum->syntax #f e)
+                                               (match type
+                                                 ['int rosette:integer?]
+                                                 ['bool rosette:boolean?]))))
+           st
+           pc)]
+   [`(if ,c ,t ,e)
+    (match-define (state val-c st-c pc-c) (interp c env st pc))
+    (match val-c
+      [#f (interp e env st-c pc-c)]
+      [(? (negate rosette:term?)) (interp t env st-c pc-c)]
+      [condition
+       (shift
+        k
+        (for ([new-condition (list (rosette:not (rosette:not condition))
+                                   (rosette:not condition))]
+              [expr (list t e)])
+          (define new-pc (cons new-condition pc-c))
+          (when (rosette:sat? (solve new-pc))
+            (enqueue! queue (thunk (k (interp expr env st-c new-pc)))))))])]))
+
+(define-syntax module-form
+  (syntax-parser
+    [(_ (#:comment x ...))
+     #'(printf "~a\n~a~a\n\n" sep (~a (~a " " 'x "\n") ...) sep)]
+    [(_ stx) #'(begin
+                 (enqueue! queue (thunk (interp (transform 'stx) (hash) (hash) '())))
+                 (main)
+                 (displayln "-----------------------------\n"))]))
+
+(define-syntax-rule (module-begin form ...) (#%module-begin (module-form form) ...))
+
+;; make user-defined variables not conflict with generated ids and deal with comments
 (define (transform stx)
   (match stx
     [(cons x y) (cons (transform x) (transform y))]
@@ -136,22 +170,25 @@
                      stx)]
     [_ stx]))
 
+;; the main loop
 (define (main)
   (cond
     [(queue-empty? queue)
+     ;; these are totally unnecessary
      (hash-clear! symbol-store)
      (rosette:clear-state!)
-     (void)]
+     (set! location 0)]
     [else
      (define to-run (dequeue! queue))
      (match (reset (to-run))
-       [(? void?) (void)]
-       [x (printf "Output: ~a\n" x)
-          (printf "Rosette assertion store: ~a\n" (rosette:asserts))])
+       [(? void?) (void)] ; catch immediate return and all errors
+       [(state (? rosette:term? t) _ pc)
+        (printf "PATH TERMINATED with pc: ~s\n" pc)
+        (printf " Example model: ~s\n" (solve pc))
+        (printf " Symbolic result: ~s\n" t)
+        (printf " Example result: ~s\n\n" (rosette:evaluate t (solve pc)))]
+       [(state x _ pc)
+        (printf "PATH TERMINATED with pc: ~s\n" pc)
+        (printf " Example model: ~s\n" (solve pc))
+        (printf " Concrete result: ~s\n\n" x)])
      (main)]))
-
-
-
-
-
-
