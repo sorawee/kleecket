@@ -161,7 +161,7 @@
 
 (define-syntax-rule (module-begin form ...) (#%module-begin (module-form form) ...))
 
-;; make user-defined variables not conflict with generated ids and deal with comments
+;; make user-defined variables not conflict with generated ids
 (define (transform stx)
   (match stx
     [(cons x y) (cons (transform x) (transform y))]
