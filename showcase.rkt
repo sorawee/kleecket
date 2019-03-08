@@ -44,4 +44,17 @@
 (+ (if (symbolic b bool) 1 10)
    (if (not (symbolic b bool)) 100 1000))
 
+(#:comment "Loop on symbolic value. BMC and Rosette would not terminate")
+
+(let ([x (symbolic x int)])
+  (if (>= x 5)
+      (displayln "skip")
+      (let ([i 0])
+        (begin
+          (while (< i x)
+            (begin
+              (displayln i)
+              (set! i (+ 1 i))))
+          i))))
+
 ;; Please add more!

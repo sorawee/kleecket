@@ -35,7 +35,6 @@
 
 (define-syntax-parameter threading
   (curry raise-syntax-error #f "wrong use outside of match+lift-rosette"))
-
 (define-syntax threading*
   (syntax-parser
     #:datum-literals (<-)
@@ -65,8 +64,7 @@
 
 (define (interp stx env st pc)
   (match+lift-rosette
-   stx env st pc
-   (= > < <= >= + - *)
+   stx env st pc (= > < <= >= + - *)
    [(? number?) (state stx st pc)]
    [(? boolean?) (state stx st pc)]
    [(? string?) (state stx st pc)]
@@ -86,41 +84,32 @@
    [`(/ ,e-left ,e-right)
     (interp `(let ([$x ,e-left])
                (let ([$y ,e-right])
-                 (begin
-                   (assert (not (= $y 0)))
-                   (/safe $x $y)))) env st pc)]
+                 (begin (assert (not (= $y 0))) (/safe $x $y)))) env st pc)]
 
    [`(lambda (,x) ,e) (state (closure x e env) st pc)]
-   [`(let ([,x ,v]) ,e) (interp `(app (lambda (,x) ,e) ,v) env st pc)]
-   [`(letrec ([,x ,e]) ,body) (interp `(let ([,x 0])
-                                         (begin
-                                           (set! ,x ,e)
-                                           ,body)) env st pc)]
+   [`(let ([,x ,v]) ,e) (interp `((lambda (,x) ,e) ,v) env st pc)]
+   [`(letrec ([,x ,e]) ,body)
+    (interp `(let ([,x 0]) (begin (set! ,x ,e) ,body)) env st pc)]
    [`(while ,c ,body)
-    (interp `(letrec ([$loop (lambda (_) (if ,c (begin ,body (app $loop 0)) (begin)))])
-               (app $loop 0)) env st pc)]
+    (interp `(letrec ([$loop (lambda (_) (if ,c (begin ,body ($loop 0)) (begin)))])
+               ($loop 0)) env st pc)]
    [`(displayln ,e)
     (threading val <- e
-               (begin (printf "STDOUT: ~a\n\n" val) val))]
+               (let ([model (solve pc)])
+                 (printf "STDOUT: ~a\n" val)
+                 (printf "PC: ~a\n" pc)
+                 (printf "Example model: ~a\n" model)
+                 (when (rosette:term? val)
+                   (printf "Example value: ~a\n" (rosette:evaluate val model)))
+                 (printf "\n")
+                 val))]
    [`(assert #f) (error 'ERROR
                         (~a "assertion fails with path condition ~s "
                             "with example model ~s\n")
                         pc (solve pc))]
    [`(assert ,e) (interp `(if ,e (begin) (assert #f)) env st pc)]
-   [`(app ,f ,a)
-    (threading val-f <- f
-               val-a <- a
-               #:explicit
-               (match val-f
-                 [(closure x body env)
-                  (set! location (add1 location))
-                  (interp body
-                          (hash-set env x location)
-                          (hash-set st location val-a) pc)]
-                 [_ (error "not a function" val-f)]))]
-   [`(set! ,x ,e)
-    (match-define (state val-e st-e pc-e) (interp e env st pc))
-    (state val-e (hash-set st (hash-ref env x) val-e) pc-e)]
+   [`(set! ,x ,e) (match-define (state val-e st-e pc-e) (interp e env st pc))
+                  (state val-e (hash-set st (hash-ref env x) val-e) pc-e)]
    [`(begin) (state (void) st pc)]
    [`(begin ,e) (interp e env st pc)]
    [`(begin ,e ,xs ...)
@@ -132,23 +121,32 @@
                       (thunk (rosette:constant (datum->syntax #f e)
                                                (match type
                                                  ['int rosette:integer?]
-                                                 ['bool rosette:boolean?]))))
-           st
-           pc)]
+                                                 ['bool rosette:boolean?])))) st pc)]
    [`(if ,c ,t ,e)
     (match-define (state val-c st-c pc-c) (interp c env st pc))
     (match val-c
       [#f (interp e env st-c pc-c)]
       [(? (negate rosette:term?)) (interp t env st-c pc-c)]
-      [condition
+      [_
        (shift
         k
-        (for ([new-condition (list (rosette:not (rosette:not condition))
-                                   (rosette:not condition))]
+        (for ([condition (list (rosette:not (rosette:not val-c)) (rosette:not val-c))]
               [expr (list t e)])
-          (define new-pc (cons new-condition pc-c))
+          (define new-pc (cons condition pc-c))
           (when (rosette:sat? (solve new-pc))
-            (enqueue! queue (thunk (k (interp expr env st-c new-pc)))))))])]))
+            (enqueue! queue (thunk (k (interp expr env st-c new-pc)))))))])]
+
+   ;; application must be the last one to prioritize primitive forms
+   [`(,f ,a)
+    (threading val-f <- f
+               val-a <- a
+               #:explicit (match val-f
+                            [(closure x body env)
+                             (set! location (add1 location))
+                             (interp body
+                                     (hash-set env x location)
+                                     (hash-set st location val-a) pc)]
+                            [_ (error "not a function" val-f)]))]))
 
 (define-syntax module-form
   (syntax-parser
@@ -165,9 +163,8 @@
 (define (transform stx)
   (match stx
     [(cons x y) (cons (transform x) (transform y))]
-    [(? symbol?) (if (string-prefix? (symbol->string stx) "$")
-                     (string->symbol (string-append "$" (symbol->string stx)))
-                     stx)]
+    [(? (λ (x) (and (symbol? x) (string-prefix? (symbol->string x) "$"))))
+     (string->symbol (string-append "$" (symbol->string stx)))]
     [_ stx]))
 
 ;; the main loop
@@ -179,8 +176,7 @@
      (rosette:clear-state!)
      (set! location 0)]
     [else
-     (define to-run (dequeue! queue))
-     (match (reset (to-run))
+     (match (reset ((dequeue! queue)))
        [(? void?) (void)] ; catch immediate return and all errors
        [(state (? rosette:term? t) _ pc)
         (printf "PATH TERMINATED with pc: ~s\n" pc)
