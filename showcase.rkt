@@ -39,4 +39,9 @@
       (displayln x)
       (set! x (+ x 1)))))
 
+(#:comment "Add annihilation")
+
+(+ (if (symbolic b bool) 1 10)
+   (if (not (symbolic b bool)) 100 1000))
+
 ;; Please add more!
