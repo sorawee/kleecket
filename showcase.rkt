@@ -57,4 +57,19 @@
               (set! i (+ 1 i))))
           i))))
 
+(#:comment "Separated heap")
+
+(let ([x 1])
+  (if (symbolic b bool)
+      (set! x (+ 10 x))
+      (set! x (+ 100 x))))
+
+(#:comment "Reserved id")
+
+set!
+
+(#:comment "No static check")
+
+(if #f set! 1)
+
 ;; Please add more!
