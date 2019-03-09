@@ -15,9 +15,8 @@
 (#:comment "We can guard division by 0")
 
 (let ([x (symbolic x int)])
-  (if (= x -1)
-      (displayln "x is 0")
-      (/ 7 (+ 1 x))))
+  (when (not (= x -1))
+    (/ 7 (+ 1 x))))
 
 (#:comment "If true branch")
 
@@ -25,7 +24,7 @@
 
 (#:comment "Yet another if true branch")
 
-(if 123 42 99)
+(if 0 42 99)
 
 (#:comment "If false branch")
 
@@ -34,7 +33,7 @@
 (#:comment "Loop")
 
 (let ([x 0])
-  (while (< x 10)
+  (while (< x 5)
     (begin
       (displayln x)
       (set! x (+ x 1)))))
@@ -47,15 +46,14 @@
 (#:comment "Loop on symbolic value. BMC and Rosette would not terminate")
 
 (let ([x (symbolic x int)])
-  (if (>= x 5)
-      (displayln "skip")
-      (let ([i 0])
-        (begin
-          (while (< i x)
-            (begin
-              (displayln i)
-              (set! i (+ 1 i))))
-          i))))
+  (when (<= x 5)
+    (let ([i 0])
+      (begin
+        (while (< i x)
+          (begin
+            (displayln i)
+            (set! i (+ 1 i))))
+        i))))
 
 (#:comment "Separated heap")
 
@@ -71,5 +69,13 @@ set!
 (#:comment "No static check")
 
 (if #f set! 1)
+
+(#:comment "Set symbolic value (STDOUT should have x = 9)")
+
+(let ([x (symbolic x int)])
+  (begin
+    (set! x (+ 1 x))
+    (when (= x 10)
+      (displayln x))))
 
 ;; Please add more!
