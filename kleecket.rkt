@@ -102,18 +102,18 @@
     (threading val <- e
                #:explicit st pc
                (state val (hash-set st (hash-ref env x) val) pc))]
-   [`(lambda (,x) ,e) (check-reserved! x) (state (closure x e env) st pc)]
+   [`(lambda (,x) ,e) (check-reserved! x)
+                      (state (closure x e env) st pc)]
    [`(displayln ,e)
     (threading val <- e
                (let ([model (solve pc)])
-                 (printf "STDOUT: ~a\nPC: ~a\nExample model: ~a" val pc model)
+                 (printf "STDOUT: ~a\nPC: ~a\nExample model: ~a\n" val pc model)
                  (when (rosette:term? val)
                    (printf "Example value: ~a\n" (rosette:evaluate val model)))
                  (printf "\n")
                  val))]
-   [`(raise) (error 'ERROR
-                    (~a "assertion fails with path condition ~s "
-                        "with example model ~s\n") pc (solve pc))]
+   [`(raise) (error 'ERROR (~a "assertion fails with path condition ~s "
+                               "with example model ~s\n") pc (solve pc))]
    [`(symbolic ,e ,type)
     (return (hash-ref! symbol-store (cons e type)
                        (thunk (rosette:constant (datum->syntax #f e)
@@ -125,13 +125,12 @@
     (match val-c
       [#f (interp e env st-c pc-c)]
       [(? (negate rosette:term?)) (interp t env st-c pc-c)]
-      [_ (shift
-          k
-          (for ([condition (list (rosette:not (rosette:not val-c)) (rosette:not val-c))]
-                [expr (list t e)])
-            (define new-pc (cons condition pc-c))
-            (when (rosette:sat? (solve new-pc))
-              (enqueue! queue (thunk (k (interp expr env st-c new-pc)))))))])]
+      [_ (shift k (for ([condition (list (rosette:not (rosette:not val-c))
+                                         (rosette:not val-c))]
+                        [expr (list t e)])
+                    (define new-pc (cons condition pc-c))
+                    (when (rosette:sat? (solve new-pc))
+                      (enqueue! queue (thunk (k (interp expr env st-c new-pc)))))))])]
 
    ;; syntactic sugar
    [`(not ,e) (interp `(if ,e #f #t) env st pc)]
