@@ -21,7 +21,7 @@ features so that programming in imperative style is possible.
 ### Core Features
 
 - Integer, boolean, string, void, and unchecked integer operations
-- Pair, empty, and their operations
+- Pair, null, and their operations
 - Symbolic values (only integer and boolean)
 - Lambda functions (of one argument)
 - Variable mutation
@@ -45,9 +45,9 @@ features so that programming in imperative style is possible.
 
 ## Installation
 
-First, install [Racket](http://racket-lang.org). Then, install 
-[Rosette](https://docs.racket-lang.org/rosette-guide/index.html), either via 
-`raco` or DrRacket's package manager. 
+First, install the latest version of [Racket](http://racket-lang.org). 
+Then, install [Rosette](https://docs.racket-lang.org/rosette-guide/index.html), 
+either via `raco` or DrRacket's package manager. 
 
 ## How to run
 

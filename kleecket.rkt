@@ -4,6 +4,7 @@
          racket/function
          racket/match
          racket/string
+         racket/pretty
          racket/format
          racket/list
          racket/stxparam
@@ -25,7 +26,7 @@
 (define location 0)
 (define reserved-id '(= > < <= >= + - * / set! /-no-check lambda displayln raise
                         symbolic if not and or let when begin assert letrec while
-                        car cdr cons empty? cons? empty int bool))
+                        car cdr cons null? cons? null int bool))
 (define sep (make-string 72 #\#))
 (define error raise-user-error)
 
@@ -46,62 +47,61 @@
 
 (define-syntax-parser threading*
   #:datum-literals (<-)
-  [(_ env:id st:id pc:id (_ (~seq id:id <- e:expr) ...
-                            #:explicit st-final:id pc-final:id ret:expr))
-   #'(let ([ST st] [PC pc])
-       (match-let* ([(state id ST PC) (interp e env ST PC)] ...)
+  [(_ env:expr st:expr pc:expr (~seq id:id <- e:expr) ...
+      #:explicit st-final:id pc-final:id ret:expr)
+   #'(let ([ST st] [PC pc] [ENV env])
+       (match-let* ([(state id ST PC) (interp e ENV ST PC)] ...)
          (let ([st-final ST] [pc-final PC]) ret)))]
-  [(_ env:id st:id pc:id (whatever ... ret:expr))
-   #'(threading* env st pc (whatever ... #:explicit ST PC (state ret ST PC)))])
+  [(_ env:expr st:expr pc:expr whatever ... ret:expr)
+   #'(threading* env st pc whatever ... #:explicit ST PC (state ret ST PC))])
 
-(define-simple-macro (app e ...)
+(define-simple-macro (app pc . xs)
   (let ([handler (λ (ex)
                    ;; Rosette asserts #f on exception, so clear it
                    (rosette:clear-asserts!)
                    (printf "EXCEPTION (see the ERROR after this for more info)\n")
                    (display (exn->string ex))
-                   (threading _ <- '(raise) (void)))])
-    (with-handlers ([exn:fail? handler]) (e ...))))
+                   (interp '(raise) (hash) (hash) pc))])
+    (with-handlers ([exn:fail? handler]) xs)))
 
 (define-for-syntax (lift-clause stx)
   (define (arity->temporaries x)
     (generate-temporaries (build-list (syntax->datum x) identity)))
   (syntax-parse stx
-    [(id:id (~optional f:id) arity:integer (~optional (~and clear? #:clear)))
+    [(id:id (~optional f:id) arity:integer
+            (~optional (~and #:clear (~bind [clear? #'(rosette:clear-asserts!)]))))
      (with-syntax ([(e ...) (arity->temporaries #'arity)]
                    [(val ...) (arity->temporaries #'arity)]
                    [func (or (attribute f) #'id)])
-       #`[`(id ,e ...) (threading (~@ val <- e) ...
-                                  (let ([ret (app func val ...)])
-                                    #,(if (attribute clear?)
-                                          #'(begin (rosette:clear-asserts!) ret)
-                                          #'ret)))])]))
+       #`[`(id ,e ...) (threading (~@ val <- e) ... #:explicit st pc
+                                  (begin0 (state (app pc func val ...) st pc)
+                                    (~? clear?)))])]))
 
 (define-syntax-parser match+lift
-  [(_ stx:id env:id st:id pc:id config clauses ...)
-   (with-syntax ([(lifted-clause ...) (stx-map lift-clause #'config)])
-     #`(syntax-parameterize ([threading (λ (stx*) #`(threading* env st pc #,stx*))])
-         (match stx lifted-clause ... clauses ...)))])
+  [(_ stx:expr env:expr st:expr pc:expr config . clauses)
+   (with-syntax ([(lifted ...) (stx-map lift-clause #'config)]
+                 [threader #'(syntax-parser [(_ . xs) #'(threading* env st pc . xs)])])
+     #`(syntax-parameterize ([threading threader]) (match stx lifted ... . clauses)))])
 
 (define (interp stx env st pc)
   (define return (curryr state st pc))
+  (define desugar (curryr interp env st pc))
   (match+lift
    stx env st pc
    ([/-no-check rosette:quotient 2 #:clear]
     [+ rosette:+ 2] [- rosette:- 2] [* rosette:* 2]
     [= rosette:= 2] [> rosette:> 2] [< rosette:< 2] [<= rosette:<= 2] [>= rosette:>= 2]
-    [car 1] [cdr 1] [cons 2] [empty? 1] [cons? 1])
+    [car 1] [cdr 1] [cons 2] [null? 1] [cons? 1])
    [(? (disjoin number? boolean? string?)) (return stx)]
    [`(void) (return (void))]
-   [`(empty) (return empty)]
+   [`(null) (return null)]
    [(? symbol?)
     (check-reserved! stx)
     (return (hash-ref st (hash-ref env stx (thunk (error 'ERROR "unbound: ~a" stx)))))]
    [`(set! ,(? symbol? x) ,e)
     (check-reserved! x)
     (threading val <- e
-               #:explicit st pc
-               (state val (hash-set st (hash-ref env x) val) pc))]
+               #:explicit st pc (state val (hash-set st (hash-ref env x) val) pc))]
    [`(lambda (,x) ,e) (check-reserved! x)
                       (state (closure x e env) st pc)]
    [`(displayln ,e)
@@ -133,22 +133,21 @@
                       (enqueue! queue (thunk (k (interp expr env st-c new-pc)))))))])]
 
    ;; syntactic sugar
-   [`(not ,e) (interp `(if ,e #f #t) env st pc)]
-   [`(and ,e-left ,e-right) (interp `(if ,e-left ,e-right #f) env st pc)]
-   [`(or ,e-left ,e-right) (interp `(if ,e-left #t ,e-right) env st pc)]
-   [`(/ ,e-left ,e-right) (interp `(let ([$x ,e-left])
-                                     (let ([$y ,e-right])
-                                       (begin (assert (not (= $y 0)))
-                                              (/-no-check $x $y)))) env st pc)]
-   [`(let ([,x ,v]) ,e) (interp `((lambda (,x) ,e) ,v) env st pc)]
-   [`(when ,c ,e) (interp `(if ,c ,e (void)) env st pc)]
-   [`(assert ,e) (interp `(when (not ,e) (raise)) env st pc)]
-   [`(begin ,xs ... ,x) (interp (foldr (λ (e a) `(let ([$_ ,e]) ,a)) x xs) env st pc)]
-   [`(letrec ([,x ,e]) ,body)
-    (interp `(let ([,x (void)]) (begin (set! ,x ,e) ,body)) env st pc)]
+   [`(not ,e) (desugar `(if ,e #f #t))]
+   [`(and ,e-left ,e-right) (desugar `(if ,e-left ,e-right #f))]
+   [`(or ,e-left ,e-right) (desugar `(if ,e-left #t ,e-right))]
+   [`(/ ,e-left ,e-right) (desugar `(let ([$x ,e-left])
+                                      (let ([$y ,e-right])
+                                        (begin (assert (not (= $y 0)))
+                                               (/-no-check $x $y)))))]
+   [`(let ([,x ,v]) ,e) (desugar `((lambda (,x) ,e) ,v))]
+   [`(when ,c ,e) (desugar `(if ,c ,e (void)))]
+   [`(assert ,e) (desugar `(when (not ,e) (raise)))]
+   [`(begin ,xs ... ,x) (desugar (foldr (λ (e a) `(let ([$_ ,e]) ,a)) x xs))]
+   [`(letrec ([,x ,e]) ,body) (desugar `(let ([,x (void)]) (begin (set! ,x ,e) ,body)))]
    [`(while ,c ,body)
-    (interp `(letrec ([$loop (lambda ($_) (when ,c (begin ,body ($loop (void)))))])
-               ($loop (void))) env st pc)]
+    (desugar `(letrec ([$loop (lambda ($_) (when ,c (begin ,body ($loop (void)))))])
+               ($loop (void))))]
 
    ;; application must be the (almost) last one to prioritize primitive forms
    [`(,f ,a) (threading val-f <- f
@@ -165,8 +164,9 @@
 
 (define-syntax-parser module-form
   [(_ (#:comment x ...)) #'(printf "~a\n~a~a\n\n" sep (~a (~a " " 'x "\n") ...) sep)]
-  [(_ stx) #'(begin
-               (enqueue! queue (thunk (interp (transform 'stx) (hash) (hash) '())))
+  [(_ stx) #'(let ([STX 'stx])
+               (printf "~a\n\n" (pretty-format STX))
+               (enqueue! queue (thunk (interp (transform STX) (hash) (hash) '())))
                (main)
                (displayln "-----------------------------\n"))])
 

@@ -8,12 +8,12 @@
     3)
 
 (#:comment "We check for division by 0"
- "Should have an assertion error")
+ "Should have an assertion error and a terminating path")
 
 (/ 7 (+ 1 (symbolic x int)))
 
 (#:comment "We can guard division by 0"
- "Should have no warning")
+ "Should have no assertion error")
 
 (let ([x (symbolic x int)])
   (when (not (= x -1))
@@ -100,27 +100,23 @@ set!
 (+ 1 2 3)
 
 (#:comment "list is always concrete"
- "Should have two paths: one with 1 and one with error")
+ "Should have two paths: one with 1 and one with error; not merged like Rosette"
+ "Also, the error branch should report path condition")
 
-(let ([x (if (symbolic b bool) (cons 1 (empty)) (empty))])
+(let ([x (if (symbolic b bool) (cons 1 (null)) (null))])
   (car x))
 
 (#:comment "list can be mapped"
  "Should have two paths: one with '(2 3 4) and one with '(7 6)")
 
 (let ([xs (if (symbolic b bool)
-              (cons 1 (cons 2 (cons 3 (empty))))
-              (cons 6 (cons 5 (empty))))])
+              (cons 1 (cons 2 (cons 3 (null))))
+              (cons 6 (cons 5 (null))))])
   (letrec ([map (lambda (f)
                   (lambda (xs)
-                    (if (empty? xs)
-                        (empty)
+                    (if (null? xs)
+                        (null)
                         (cons (f (car xs)) ((map f) (cdr xs))))))])
     ((map (lambda (x) (+ 1 x))) xs)))
-
-(#:comment "Report error gracefully"
- "Should report error on primitive exception")
-
-(when (symbolic b bool) (+ #t 1))
 
 ;; Please add more!
