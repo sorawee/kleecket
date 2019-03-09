@@ -7,12 +7,13 @@
          racket/format
          racket/list
          racket/stxparam
+         racket/exn
          syntax/parse/define
          data/queue
          (prefix-in rosette: rosette)
          (for-syntax racket/function
-                     racket/syntax
-                     racket/base))
+                     racket/base
+                     syntax/stx))
 
 (provide (rename-out [module-begin #%module-begin]))
 
@@ -22,24 +23,26 @@
 (define queue (make-queue))
 (define symbol-store (make-hash))
 (define location 0)
-(define reserved-id '(= > < <= >= + - * / set! /no-check lambda displayln raise
-                        symbolic if not and or let when begin assert letrec while))
+(define reserved-id '(= > < <= >= + - * / set! /-no-check lambda displayln raise
+                        symbolic if not and or let when begin assert letrec while
+                        car cdr cons empty? cons? empty int bool))
 (define sep (make-string 72 #\#))
 (define error raise-user-error)
 
 (define (assert x #:msg [msg #f] . xs)
-  (when (not x) (apply error (or msg "Assertion error") x xs)))
-
-(define (clear-assert! v) (rosette:clear-asserts!) v)
+  (when (not x) (apply error (or msg "INTERNAL ERROR:") xs)))
 
 (define (solve pc)
   (assert (empty? (rosette:asserts))
-          #:msg "Rosette assertion store is not empty (pc attached)"
+          #:msg "INTERNAL ERROR: Rosette assertion store is not empty (pc attached)"
           (rosette:asserts) pc)
   (rosette:solve (rosette:assert (apply rosette:&& pc))))
 
+(define (check-reserved! stx)
+  (when (member stx reserved-id) (error 'ERROR "reserved: ~a" stx)))
+
 (define-syntax-parameter threading
-  (curry raise-syntax-error #f "wrong use outside of match+lift-rosette"))
+  (curry raise-syntax-error #f "wrong use outside of match+lift"))
 
 (define-syntax-parser threading*
   #:datum-literals (<-)
@@ -51,50 +54,66 @@
   [(_ env:id st:id pc:id (whatever ... ret:expr))
    #'(threading* env st pc (whatever ... #:explicit ST PC (state ret ST PC)))])
 
-(define-syntax-parser match+lift-rosette
-  [(~and expr (_ stx:id env:id st:id pc:id (sym:id ...) clauses ...))
-   (with-syntax ([(rosette-sym ...) (map (curry format-id #'expr "rosette:~a")
-                                         (syntax->list #'(sym ...)))])
+(define-simple-macro (app e ...)
+  (let ([handler (λ (ex)
+                   ;; Rosette asserts #f on exception, so clear it
+                   (rosette:clear-asserts!)
+                   (printf "EXCEPTION (see the ERROR after this for more info)\n")
+                   (display (exn->string ex))
+                   (threading _ <- '(raise) (void)))])
+    (with-handlers ([exn:fail? handler]) (e ...))))
+
+(define-for-syntax (lift-clause stx)
+  (define (arity->temporaries x)
+    (generate-temporaries (build-list (syntax->datum x) identity)))
+  (syntax-parse stx
+    [(id:id (~optional f:id) arity:integer (~optional (~and clear? #:clear)))
+     (with-syntax ([(e ...) (arity->temporaries #'arity)]
+                   [(val ...) (arity->temporaries #'arity)]
+                   [func (or (attribute f) #'id)])
+       #`[`(id ,e ...) (threading (~@ val <- e) ...
+                                  (let ([ret (app func val ...)])
+                                    #,(if (attribute clear?)
+                                          #'(begin (rosette:clear-asserts!) ret)
+                                          #'ret)))])]))
+
+(define-syntax-parser match+lift
+  [(_ stx:id env:id st:id pc:id config clauses ...)
+   (with-syntax ([(lifted-clause ...) (stx-map lift-clause #'config)])
      #`(syntax-parameterize ([threading (λ (stx*) #`(threading* env st pc #,stx*))])
-         (match stx
-           [`(sym ,e-left ,e-right) (threading val-left <- e-left
-                                               val-right <- e-right
-                                               (rosette-sym val-left val-right))] ...
-           clauses ...)))])
+         (match stx lifted-clause ... clauses ...)))])
 
 (define (interp stx env st pc)
   (define return (curryr state st pc))
-  (match+lift-rosette
-   stx env st pc (= > < <= >= + - *)
-   [(? number?) (return stx)]
-   [(? boolean?) (return stx)]
-   [(? string?) (return stx)]
+  (match+lift
+   stx env st pc
+   ([/-no-check rosette:quotient 2 #:clear]
+    [+ rosette:+ 2] [- rosette:- 2] [* rosette:* 2]
+    [= rosette:= 2] [> rosette:> 2] [< rosette:< 2] [<= rosette:<= 2] [>= rosette:>= 2]
+    [car 1] [cdr 1] [cons 2] [empty? 1] [cons? 1])
+   [(? (disjoin number? boolean? string?)) (return stx)]
    [`(void) (return (void))]
+   [`(empty) (return empty)]
    [(? symbol?)
-    (when (member stx reserved-id) (error "reserved identifier" stx))
-    (return (hash-ref st (hash-ref env stx (thunk (error "unbound identifier" stx)))))]
-   [`(/no-check ,e-left ,e-right)
-    (threading val-left <- e-left
-               val-right <- e-right
-               (clear-assert! (rosette:quotient val-left val-right)))]
-   [`(set! ,x ,e) (threading val <- e
-                             #:explicit st pc
-                             (state val (hash-set st (hash-ref env x) val) pc))]
-   [`(lambda (,x) ,e) (state (closure x e env) st pc)]
+    (check-reserved! stx)
+    (return (hash-ref st (hash-ref env stx (thunk (error 'ERROR "unbound: ~a" stx)))))]
+   [`(set! ,(? symbol? x) ,e)
+    (check-reserved! x)
+    (threading val <- e
+               #:explicit st pc
+               (state val (hash-set st (hash-ref env x) val) pc))]
+   [`(lambda (,x) ,e) (check-reserved! x) (state (closure x e env) st pc)]
    [`(displayln ,e)
     (threading val <- e
                (let ([model (solve pc)])
-                 (printf "STDOUT: ~a\n" val)
-                 (printf "PC: ~a\n" pc)
-                 (printf "Example model: ~a\n" model)
+                 (printf "STDOUT: ~a\nPC: ~a\nExample model: ~a" val pc model)
                  (when (rosette:term? val)
                    (printf "Example value: ~a\n" (rosette:evaluate val model)))
                  (printf "\n")
                  val))]
    [`(raise) (error 'ERROR
                     (~a "assertion fails with path condition ~s "
-                        "with example model ~s\n")
-                    pc (solve pc))]
+                        "with example model ~s\n") pc (solve pc))]
    [`(symbolic ,e ,type)
     (return (hash-ref! symbol-store (cons e type)
                        (thunk (rosette:constant (datum->syntax #f e)
@@ -121,7 +140,7 @@
    [`(/ ,e-left ,e-right) (interp `(let ([$x ,e-left])
                                      (let ([$y ,e-right])
                                        (begin (assert (not (= $y 0)))
-                                              (/no-check $x $y)))) env st pc)]
+                                              (/-no-check $x $y)))) env st pc)]
    [`(let ([,x ,v]) ,e) (interp `((lambda (,x) ,e) ,v) env st pc)]
    [`(when ,c ,e) (interp `(if ,c ,e (void)) env st pc)]
    [`(assert ,e) (interp `(when (not ,e) (raise)) env st pc)]
@@ -132,7 +151,7 @@
     (interp `(letrec ([$loop (lambda ($_) (when ,c (begin ,body ($loop (void)))))])
                ($loop (void))) env st pc)]
 
-   ;; application must be the last one to prioritize primitive forms
+   ;; application must be the (almost) last one to prioritize primitive forms
    [`(,f ,a) (threading val-f <- f
                         val-a <- a
                         #:explicit st pc
@@ -142,7 +161,8 @@
                            (interp body
                                    (hash-set env x location)
                                    (hash-set st location val-a) pc)]
-                          [_ (error "not a function" val-f)]))]))
+                          [_ (error 'ERROR "applied to non-function: ~a" val-f)]))]
+   [stx (error 'ERROR "unrecognized syntax: ~a" stx)]))
 
 (define-syntax-parser module-form
   [(_ (#:comment x ...)) #'(printf "~a\n~a~a\n\n" sep (~a (~a " " 'x "\n") ...) sep)]
@@ -162,19 +182,18 @@
 
 ;; the main loop
 (define (main)
-  (cond
-    [(queue-empty? queue) (hash-clear! symbol-store) ; these are totally unnecessary
-                          (rosette:clear-state!)
-                          (set! location 0)]
-    [else (match (reset ((dequeue! queue)))
-            [(? void?) (void)] ; catch immediate return and all errors
-            [(state (? rosette:term? t) _ pc)
-             (printf "PATH TERMINATED with pc: ~s\n" pc)
-             (printf " Example model: ~s\n" (solve pc))
-             (printf " Symbolic result: ~s\n" t)
-             (printf " Example result: ~s\n\n" (rosette:evaluate t (solve pc)))]
-            [(state x _ pc)
-             (printf "PATH TERMINATED with pc: ~s\n" pc)
-             (printf " Example model: ~s\n" (solve pc))
-             (printf " Concrete result: ~s\n\n" x)])
-          (main)]))
+  (cond [(queue-empty? queue) (hash-clear! symbol-store) ; these are totally unnecessary
+                              (rosette:clear-state!)
+                              (set! location 0)]
+        [else (match (reset ((dequeue! queue)))
+                [(? void?) (void)] ; catch immediate return and all errors
+                [(state (? rosette:term? t) _ pc)
+                 (printf "PATH TERMINATED with pc: ~s\n" pc)
+                 (printf " Example model: ~s\n" (solve pc))
+                 (printf " Symbolic result: ~s\n" t)
+                 (printf " Example result: ~s\n\n" (rosette:evaluate t (solve pc)))]
+                [(state x _ pc)
+                 (printf "PATH TERMINATED with pc: ~s\n" pc)
+                 (printf " Example model: ~s\n" (solve pc))
+                 (printf " Concrete result: ~s\n\n" x)])
+              (main)]))
