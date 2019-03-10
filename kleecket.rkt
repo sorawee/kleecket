@@ -22,6 +22,7 @@
 (struct closure (x body env))
 
 (define queue (make-queue))
+(define type-map (hash 'int rosette:integer? 'bool rosette:boolean?))
 (define symbol-store (make-hash))
 (define location 0)
 (define reserved-id '(= > < <= >= + - * / set! /-no-check lambda displayln raise
@@ -41,8 +42,6 @@
 
 (define (check-reserved! stx)
   (when (member stx reserved-id) (error 'ERROR "reserved: ~a" stx)))
-
-(define type-map (hash 'int rosette:integer? 'bool rosette:boolean?))
 
 (define-syntax-parameter threading
   (curry raise-syntax-error #f "wrong use outside of match+lift"))
@@ -168,7 +167,7 @@
                (main)
                (displayln "-----------------------------\n"))])
 
-(define-syntax-rule (module-begin form ...) (#%module-begin (module-form form) ...))
+(define-simple-macro (module-begin form ...) (#%module-begin (module-form form) ...))
 
 ;; make user-defined variables not conflict with generated ids
 (define/match (transform stx)
@@ -179,18 +178,19 @@
 
 ;; the main loop
 (define (main)
-  (cond [(queue-empty? queue) (hash-clear! symbol-store) ; these are totally unnecessary
-                              (rosette:clear-state!)
-                              (set! location 0)]
-        [else (match (reset ((dequeue! queue)))
-                [(? void?) (void)] ; catch immediate return and all errors
-                [(state (? rosette:term? t) _ pc)
-                 (printf "PATH TERMINATED with pc: ~s\n" pc)
-                 (printf " Example model: ~s\n" (solve pc))
-                 (printf " Symbolic result: ~s\n" t)
-                 (printf " Example result: ~s\n\n" (rosette:evaluate t (solve pc)))]
-                [(state x _ pc)
-                 (printf "PATH TERMINATED with pc: ~s\n" pc)
-                 (printf " Example model: ~s\n" (solve pc))
-                 (printf " Concrete result: ~s\n\n" x)])
-              (main)]))
+  (cond
+    [(queue-empty? queue) (hash-clear! symbol-store) ; these are totally unnecessary
+                          (rosette:clear-state!)
+                          (set! location 0)]
+    [else (match (reset ((dequeue! queue)))
+            [(? void?) (void)] ; catch immediate return and all errors
+            [(state (? rosette:term? t) _ pc)
+             (printf "PATH TERMINATED with pc: ~s\n" pc)
+             (printf " Example model: ~s\n" (solve pc))
+             (printf " Symbolic result: ~s\n" t)
+             (printf " Example result: ~s\n\n" (rosette:evaluate t (solve pc)))]
+            [(state x _ pc)
+             (printf "PATH TERMINATED with pc: ~s\n" pc)
+             (printf " Example model: ~s\n" (solve pc))
+             (printf " Concrete result: ~s\n\n" x)])
+          (main)]))
