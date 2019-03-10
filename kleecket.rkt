@@ -42,18 +42,17 @@
 (define (check-reserved! stx)
   (when (member stx reserved-id) (error 'ERROR "reserved: ~a" stx)))
 
+(define type-map (hash 'int rosette:integer? 'bool rosette:boolean?))
+
 (define-syntax-parameter threading
   (curry raise-syntax-error #f "wrong use outside of match+lift"))
 
 (define-syntax-parser threading*
   #:datum-literals (<-)
-  [(_ env:expr st:expr pc:expr (~seq id:id <- e:expr) ...
-      #:explicit st-final:id pc-final:id ret:expr)
+  [(_ env:expr st:expr pc:expr (~seq id:id <- e:expr) ... #:ret st*:id pc*:id ret:expr)
    #'(let ([ST st] [PC pc] [ENV env])
        (match-let* ([(state id ST PC) (interp e ENV ST PC)] ...)
-         (let ([st-final ST] [pc-final PC]) ret)))]
-  [(_ env:expr st:expr pc:expr whatever ... ret:expr)
-   #'(threading* env st pc whatever ... #:explicit ST PC (state ret ST PC))])
+         (let ([st* ST] [pc* PC]) ret)))])
 
 (define-simple-macro (app pc . xs)
   (let ([handler (λ (ex)
@@ -69,13 +68,12 @@
     (generate-temporaries (build-list (syntax->datum x) identity)))
   (syntax-parse stx
     [(id:id (~optional f:id) arity:integer
-            (~optional (~and #:clear (~bind [clear? #'(rosette:clear-asserts!)]))))
+            (~optional (~and #:clear (~bind [clear! #'(rosette:clear-asserts!)]))))
      (with-syntax ([(e ...) (arity->temporaries #'arity)]
-                   [(val ...) (arity->temporaries #'arity)]
-                   [func (or (attribute f) #'id)])
-       #`[`(id ,e ...) (threading (~@ val <- e) ... #:explicit st pc
-                                  (begin0 (state (app pc func val ...) st pc)
-                                    (~? clear?)))])]))
+                   [(val ...) (arity->temporaries #'arity)])
+       #`[`(id ,e ...) (threading (~@ val <- e) ... #:ret st pc
+                                  (begin0 (state (app pc (~? f id) val ...) st pc)
+                                    (~? clear!)))])]))
 
 (define-syntax-parser match+lift
   [(_ stx:expr env:expr st:expr pc:expr config . clauses)
@@ -100,26 +98,26 @@
     (return (hash-ref st (hash-ref env stx (thunk (error 'ERROR "unbound: ~a" stx)))))]
    [`(set! ,(? symbol? x) ,e)
     (check-reserved! x)
-    (threading val <- e
-               #:explicit st pc (state val (hash-set st (hash-ref env x) val) pc))]
+    (threading val <- e #:ret st pc (state val (hash-set st (hash-ref env x) val) pc))]
    [`(lambda (,x) ,e) (check-reserved! x)
                       (state (closure x e env) st pc)]
    [`(displayln ,e)
     (threading val <- e
+               #:ret st pc
                (let ([model (solve pc)])
                  (printf "STDOUT: ~a\nPC: ~a\nExample model: ~a\n" val pc model)
                  (when (rosette:term? val)
                    (printf "Example value: ~a\n" (rosette:evaluate val model)))
                  (printf "\n")
-                 val))]
+                 (state val st pc)))]
    [`(raise) (error 'ERROR (~a "assertion fails with path condition ~s "
                                "with example model ~s\n") pc (solve pc))]
    [`(symbolic ,e ,type)
     (return (hash-ref! symbol-store (cons e type)
                        (thunk (rosette:constant (datum->syntax #f e)
-                                                (match type
-                                                  ['int rosette:integer?]
-                                                  ['bool rosette:boolean?])))))]
+                                                (hash-ref type-map type)))))]
+   [`(symbolic* ,type) (rosette:define-symbolic* symbol (hash-ref type-map type))
+                       (return symbol)]
    [`(if ,c ,t ,e)
     (match-define (state val-c st-c pc-c) (interp c env st pc))
     (match val-c
@@ -147,12 +145,12 @@
    [`(letrec ([,x ,e]) ,body) (desugar `(let ([,x (void)]) (begin (set! ,x ,e) ,body)))]
    [`(while ,c ,body)
     (desugar `(letrec ([$loop (lambda ($_) (when ,c (begin ,body ($loop (void)))))])
-               ($loop (void))))]
+                ($loop (void))))]
 
    ;; application must be the (almost) last one to prioritize primitive forms
    [`(,f ,a) (threading val-f <- f
                         val-a <- a
-                        #:explicit st pc
+                        #:ret st pc
                         (match val-f
                           [(closure x body env)
                            (set! location (add1 location))

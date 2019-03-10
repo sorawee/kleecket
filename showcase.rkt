@@ -86,13 +86,13 @@ set!
 (when #f set!)
 
 (#:comment "Set symbolic value"
- "Should have x = 9 for STDOUT")
+ "Should have x = 9 when outputting 10")
 
 (let ([x (symbolic x int)])
   (begin
     (set! x (+ 1 x))
     (when (= x 10)
-      (displayln x))))
+      x)))
 
 (#:comment "Plus has arity 2 as specified"
  "Should have a syntax error")
@@ -118,5 +118,51 @@ set!
                         (null)
                         (cons (f (car xs)) ((map f) (cdr xs))))))])
     ((map (lambda (x) (+ 1 x))) xs)))
+
+(#:comment "Sum of even number is even"
+ "Should have 8 paths, no assertion error")
+
+(letrec ([make-symbolic-list (lambda (n)
+                               (if (= n 0)
+                                   (null)
+                                   (cons (symbolic* int)
+                                         (make-symbolic-list (- n 1)))))])
+  (letrec ([foldr (lambda (f)
+                    (lambda (base)
+                      (lambda (xs)
+                        (if (null? xs)
+                            base
+                            ((f (car xs)) (((foldr f) base) (cdr xs)))))))])
+    (let ([filter (lambda (f)
+                    ((foldr (lambda (e) (lambda (a) (if (f e) (cons e a) a))))
+                     (null)))])
+      (let ([sum ((foldr (lambda (e) (lambda (a) (+ a e)))) 0)])
+        (let ([remainder (lambda (x) (lambda (y) (- x (* (/ x y) y))))])
+          (assert (= 0 ((remainder (sum ((filter (lambda (x) (= 0 ((remainder x) 2))))
+                                         (make-symbolic-list 3)))) 2))))))))
+
+(#:comment "Sum of even number is not always divisible by 4"
+ "Should have 15 paths, 7 with assertion error"
+ "(Only 7 paths because the sum of empty list is always divisible by 4)")
+
+(letrec ([make-symbolic-list (lambda (n)
+                               (if (= n 0)
+                                   (null)
+                                   (cons (symbolic* int)
+                                         (make-symbolic-list (- n 1)))))])
+  (letrec ([foldr (lambda (f)
+                    (lambda (base)
+                      (lambda (xs)
+                        (if (null? xs)
+                            base
+                            ((f (car xs)) (((foldr f) base) (cdr xs)))))))])
+    (let ([filter (lambda (f)
+                    ((foldr (lambda (e) (lambda (a) (if (f e) (cons e a) a))))
+                     (null)))])
+      (let ([sum ((foldr (lambda (e) (lambda (a) (+ a e)))) 0)])
+        (let ([remainder (lambda (x) (lambda (y) (- x (* (/ x y) y))))])
+          (assert (= 0 ((remainder (sum ((filter (lambda (x) (= 0 ((remainder x) 2))))
+                                         (make-symbolic-list 3)))) 4))))))))
+
 
 ;; Please add more!
