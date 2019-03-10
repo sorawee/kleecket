@@ -160,7 +160,7 @@
    [stx (error 'ERROR "unrecognized syntax: ~a" stx)]))
 
 (define-syntax-parser module-form
-  [(_ (#:comment x ...)) #'(printf "~a\n~a~a\n\n" sep (~a (~a " " 'x "\n") ...) sep)]
+  [(_ (#:comment x ...)) #'(displayln (~a sep "\n" (~a " " 'x "\n") ... sep "\n"))]
   [(_ stx) #'(let ([STX 'stx])
                (printf "~a\n\n" (pretty-format STX))
                (enqueue! queue (thunk (interp (transform STX) (hash) (hash) '())))
