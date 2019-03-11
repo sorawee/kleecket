@@ -25,7 +25,7 @@
 (define type-map (hash 'int rosette:integer? 'bool rosette:boolean?))
 (define symbol-store (make-hash))
 (define location 0)
-(define reserved-id '(= > < <= >= + - * / set! lambda displayln raise
+(define reserved-id '(= > < <= >= + - * / set! lambda displayln
                         symbolic symbolic* if not and or
                         let when begin assert letrec while
                         car cdr cons null? cons? null int bool))
@@ -60,7 +60,7 @@
                    (rosette:clear-asserts!)
                    (printf "EXCEPTION (see the ERROR after this for more info)\n")
                    (display (exn->string ex))
-                   (interp '(raise) (hash) (hash) pc))])
+                   (interp '($raise) (hash) (hash) pc))])
     (with-handlers ([exn:fail? handler]) xs)))
 
 (define-for-syntax (lift-clause stx)
@@ -86,7 +86,7 @@
   (define desugar (curryr interp env st pc))
   (match+lift
    stx env st pc
-   ([$-no-check rosette:quotient 2 #:clear]
+   ([$/ rosette:quotient 2 #:clear]
     [+ rosette:+ 2] [- rosette:- 2] [* rosette:* 2]
     [= rosette:= 2] [> rosette:> 2] [< rosette:< 2] [<= rosette:<= 2] [>= rosette:>= 2]
     [car 1] [cdr 1] [cons 2] [null? 1] [cons? 1])
@@ -110,7 +110,7 @@
                    (printf "Example value: ~a\n" (rosette:evaluate val model)))
                  (printf "\n")
                  (state val st pc)))]
-   [`(raise) (error 'ERROR (~a "assertion fails with path condition ~s "
+   [`($raise) (error 'ERROR (~a "assertion fails with path condition ~s "
                                "with example model ~s\n") pc (solve pc))]
    [`(symbolic ,e ,type)
     (return (hash-ref! symbol-store (cons e type)
@@ -137,10 +137,10 @@
    [`(/ ,e-left ,e-right) (desugar `(let ([$x ,e-left])
                                       (let ([$y ,e-right])
                                         (begin (assert (not (= $y 0)))
-                                               ($-no-check $x $y)))))]
+                                               ($/ $x $y)))))]
    [`(let ([,x ,v]) ,e) (desugar `((lambda (,x) ,e) ,v))]
    [`(when ,c ,e) (desugar `(if ,c ,e (void)))]
-   [`(assert ,e) (desugar `(when (not ,e) (raise)))]
+   [`(assert ,e) (desugar `(when (not ,e) ($raise)))]
    [`(begin ,xs ... ,x) (desugar (foldr (λ (e a) `(let ([$_ ,e]) ,a)) x xs))]
    [`(letrec ([,x ,v]) ,e) (desugar `(let ([,x (void)]) (begin (set! ,x ,v) ,e)))]
    [`(while ,c ,body)
@@ -158,7 +158,7 @@
                                    (hash-set env x location)
                                    (hash-set st location val-a) pc)]
                           [_ (printf "ERROR: applied to non-function: ~a\n" val-f)
-                             (interp '(raise) (hash) (hash) pc)]))]
+                             (interp '($raise) (hash) (hash) pc)]))]
    [stx (error 'ERROR "unrecognized syntax: ~a" stx)]))
 
 (define-syntax-parser module-form
