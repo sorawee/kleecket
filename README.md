@@ -68,17 +68,17 @@ Either execute `racket showcase.rkt` or open `showcase.rkt` with DrRacket and ru
 ## Grammar
 
 ```
-E :=   (void) | <string> | <integer> | #t | #f
-     | (symbolic S T) | (symbolic* T) | (if E E E) | (assert E)
-     | (E E)
-     | (set! S E) | (lambda (S) E)
-     | (displayln e)
-     | (/ E E) | (* E E) | (+ E E) | (- E E)
-     | (= E E) | (> E E) | (< E E) | (<= E E) | (>= E E)
-     | (null) | (cons E E) | (car E) | (cdr E)
-     | (null? E) | (cons? E)
-     | (not E) | (and E E) | (or E E) 
-     | (when E E) | (begin E E ...) | (letrec ([S E]) E) | (while E E)
+E := (void) | <string> | <integer> | #t | #f
+   | (symbolic S T) | (symbolic* T) | (if E E E) | (assert E)
+   | (E E)
+   | (set! S E) | (lambda (S) E)
+   | (displayln e)
+   | (/ E E) | (* E E) | (+ E E) | (- E E)
+   | (= E E) | (> E E) | (< E E) | (<= E E) | (>= E E)
+   | (null) | (cons E E) | (car E) | (cdr E)
+   | (null? E) | (cons? E)
+   | (not E) | (and E E) | (or E E) 
+   | (when E E) | (begin E E ...) | (letrec ([S E]) E) | (while E E)
 S := symbol
 T := int | bool
 ```
