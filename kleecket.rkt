@@ -142,7 +142,7 @@
    [`(when ,c ,e) (desugar `(if ,c ,e (void)))]
    [`(assert ,e) (desugar `(when (not ,e) (raise)))]
    [`(begin ,xs ... ,x) (desugar (foldr (λ (e a) `(let ([$_ ,e]) ,a)) x xs))]
-   [`(letrec ([,x ,e]) ,body) (desugar `(let ([,x (void)]) (begin (set! ,x ,e) ,body)))]
+   [`(letrec ([,x ,v]) ,e) (desugar `(let ([,x (void)]) (begin (set! ,x ,v) ,e)))]
    [`(while ,c ,body)
     (desugar `(letrec ([$loop (lambda ($_) (when ,c (begin ,body ($loop (void)))))])
                 ($loop (void))))]
