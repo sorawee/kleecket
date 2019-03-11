@@ -25,8 +25,9 @@
 (define type-map (hash 'int rosette:integer? 'bool rosette:boolean?))
 (define symbol-store (make-hash))
 (define location 0)
-(define reserved-id '(= > < <= >= + - * / set! /-no-check lambda displayln raise
-                        symbolic if not and or let when begin assert letrec while
+(define reserved-id '(= > < <= >= + - * / set! lambda displayln raise
+                        symbolic symbolic* if not and or
+                        let when begin assert letrec while
                         car cdr cons null? cons? null int bool))
 (define sep (make-string 72 #\#))
 (define error raise-user-error)
@@ -85,7 +86,7 @@
   (define desugar (curryr interp env st pc))
   (match+lift
    stx env st pc
-   ([/-no-check rosette:quotient 2 #:clear]
+   ([$-no-check rosette:quotient 2 #:clear]
     [+ rosette:+ 2] [- rosette:- 2] [* rosette:* 2]
     [= rosette:= 2] [> rosette:> 2] [< rosette:< 2] [<= rosette:<= 2] [>= rosette:>= 2]
     [car 1] [cdr 1] [cons 2] [null? 1] [cons? 1])
@@ -136,7 +137,7 @@
    [`(/ ,e-left ,e-right) (desugar `(let ([$x ,e-left])
                                       (let ([$y ,e-right])
                                         (begin (assert (not (= $y 0)))
-                                               (/-no-check $x $y)))))]
+                                               ($-no-check $x $y)))))]
    [`(let ([,x ,v]) ,e) (desugar `((lambda (,x) ,e) ,v))]
    [`(when ,c ,e) (desugar `(if ,c ,e (void)))]
    [`(assert ,e) (desugar `(when (not ,e) (raise)))]
@@ -156,7 +157,8 @@
                            (interp body
                                    (hash-set env x location)
                                    (hash-set st location val-a) pc)]
-                          [_ (error 'ERROR "applied to non-function: ~a" val-f)]))]
+                          [_ (printf "ERROR: applied to non-function: ~a\n" val-f)
+                             (interp '(raise) (hash) (hash) pc)]))]
    [stx (error 'ERROR "unrecognized syntax: ~a" stx)]))
 
 (define-syntax-parser module-form
@@ -184,13 +186,12 @@
                           (set! location 0)]
     [else (match (reset ((dequeue! queue)))
             [(? void?) (void)] ; catch immediate return and all errors
-            [(state (? rosette:term? t) _ pc)
-             (printf "PATH TERMINATED with pc: ~s\n" pc)
-             (printf " Example model: ~s\n" (solve pc))
-             (printf " Symbolic result: ~s\n" t)
-             (printf " Example result: ~s\n\n" (rosette:evaluate t (solve pc)))]
             [(state x _ pc)
              (printf "PATH TERMINATED with pc: ~s\n" pc)
              (printf " Example model: ~s\n" (solve pc))
-             (printf " Concrete result: ~s\n\n" x)])
+             (cond
+               [(rosette:term? x)
+                (printf " Symbolic result: ~s\n" x)
+                (printf " Example result: ~s\n\n" (rosette:evaluate x (solve pc)))]
+               [else (printf " Concrete result: ~s\n\n" x)])])
           (main)]))

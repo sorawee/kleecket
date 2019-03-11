@@ -163,6 +163,3 @@ set!
         (let ([remainder (lambda (x) (lambda (y) (- x (* (/ x y) y))))])
           (assert (= 0 ((remainder (sum ((filter (lambda (x) (= 0 ((remainder x) 2))))
                                          (make-symbolic-list 3)))) 4))))))))
-
-
-;; Please add more!
