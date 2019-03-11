@@ -111,7 +111,7 @@
                  (printf "\n")
                  (state val st pc)))]
    [`($raise) (error 'ERROR (~a "assertion fails with path condition ~s "
-                               "with example model ~s\n") pc (solve pc))]
+                                "with example model ~s\n") pc (solve pc))]
    [`(symbolic ,e ,type)
     (return (hash-ref! symbol-store (cons e type)
                        (thunk (rosette:constant (datum->syntax #f e)
