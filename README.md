@@ -67,7 +67,18 @@ Either execute `racket showcase.rkt` or open `showcase.rkt` with DrRacket and ru
 
 ## Grammar
 
-Please add grammar here!
+<!-- Unclear how to format this -->
+E :=  (void) | null | (raise) | (E E)
+      | (set! S E) | (lambda (S) E)
+      | (displayln e) | (if E E E)
+      | (symbolic S T) | (symbolic\* T)
+      | (/-no-check E E) | (* E E)
+      | (+ E E) | (- E E) | (= E E)
+      | (> E E) | (< E E) | (<= E E) | (>= E E)
+      | (car E) | (cdr E) | (cons E E)
+      | (null? E) | (cons? E)
+S := symbol
+T := integer? | boolean?
 
 ## Contributors
 
